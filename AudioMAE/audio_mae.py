@@ -104,7 +104,7 @@ class AudioMaskedAutoencoderViT(nn.Module):
     def patchify(self, imgs):
         """
         imgs: (N, 1, H, W)
-        x: (N, L, patch_size**2 *3)
+        x: (N, L, patch_size**2 *1)
         """
         p = self.patch_embed.patch_size[0]
 
@@ -117,16 +117,17 @@ class AudioMaskedAutoencoderViT(nn.Module):
 
     def unpatchify(self, x):
         """
-        x: (N, L, patch_size**2 *3)
-        imgs: (N, 3, H, W)
+        x: (N, L, patch_size**2 *1)
+        imgs: (N, 1, H, W)
         """
         p = self.patch_embed.patch_size[0]
-        h = w = int(x.shape[1] ** .5)
+        h = self.grid_h
+        w = self.grid_w
         assert h * w == x.shape[1]
 
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, 3))
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, 1))
         x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
+        imgs = x.reshape(shape=(x.shape[0], 1, h * p, w * p))
         return imgs
 
     def random_masking(self, x, mask_ratio):
@@ -158,21 +159,28 @@ class AudioMaskedAutoencoderViT(nn.Module):
 
     def forward_encoder(self, x, mask_ratio):
         # embed patches
-        x = self.patch_embed(x)
+        print(f"x : {x.shape}, before patch_embed") # [2, 1, 1024, 128], [batch, channel, time, frequency]
+        x = self.patch_embed(x) # [1024, 128] -> (16, 16) -> 64*8 = 512
+        print(f"x : {x.shape}, after patch_embed") # [2, 512, 768], [batch, number of patches, embed_dim=768]
 
         # add pos embed w/o cls token
-        x = x + self.pos_embed[:, 1:, :]
+        x = x + self.pos_embed[:, 1:, :] # 
 
         # masking: length -> length * mask_ratio
-        x, mask, ids_restore = self.random_masking(x, mask_ratio)
+        print(f"x : {x.shape}, before random masking") # [2, 512, 768]
+        x, mask, ids_restore = self.random_masking(x, mask_ratio) 
+        print(f"x : {x.shape}, after random masking") # [2, 102, 768], mask_ratio = 0.8
 
         # append cls token
-        cls_token = self.cls_token + self.pos_embed[:, :1, :]
+        cls_token = self.cls_token + self.pos_embed[:, :1, :] # [1, 1, 768]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+        print(f"cls : {cls_tokens.shape}") # [2, 1, 768]
         x = torch.cat((cls_tokens, x), dim=1)
 
         # apply Transformer blocks
+        print(f"x : {x.shape}, before encoder") # [2, 103, 768]
         x = self.encoder(x)
+        print(f"x : {x.shape}") # [2, 103, 768]
         x = self.norm(x)
 
         return x, mask, ids_restore
